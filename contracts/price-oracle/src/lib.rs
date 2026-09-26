@@ -5700,6 +5700,12 @@ mod bft_tests;
 mod finality_tests;
 
 #[cfg(test)]
+mod chaos_tests;
+
+#[cfg(test)]
+mod gas_amplification_tests;
+
+#[cfg(test)]
 mod correlation_feature_tests;
 
 #[cfg(test)]

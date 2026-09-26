@@ -959,6 +959,18 @@ pub fn submit_price(
         panic_with_error!(env, ErrorCode::InvalidTimestamp);
     }
 
+    // A delayed (out-of-order) submission must never silently replace a newer
+    // price from the same source: reject it loudly instead.
+    if let Some(prev) = env
+        .storage()
+        .persistent()
+        .get::<_, PriceEntry>(&DataKey::Submission(asset.clone(), source.clone()))
+    {
+        if timestamp < prev.timestamp {
+            panic_with_error!(env, ErrorCode::InvalidTimestamp);
+        }
+    }
+
     if check_deviation_circuit_breaker(env, &source, &asset, price) {
         return;
     }
