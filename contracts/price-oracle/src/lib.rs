@@ -5672,3 +5672,15 @@ mod issue_380_memory_allocation_tests;
 
 #[cfg(test)]
 mod issue_381_adaptive_ttl_tests;
+
+#[cfg(test)]
+mod issue_452_zk_soundness_tests;
+
+#[cfg(test)]
+mod issue_453_migration_desync_tests;
+
+#[cfg(test)]
+mod issue_456_pause_freeze_tests;
+
+#[cfg(test)]
+mod issue_457_rate_limit_abuse_tests;

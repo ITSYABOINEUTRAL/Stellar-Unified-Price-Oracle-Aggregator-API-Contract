@@ -1292,6 +1292,10 @@ pub fn get_price(env: &Env, asset: Address, max_age: u64) -> Option<AggregatePri
 
     let key = DataKey::Aggregate(asset.clone());
     let result: AggregatePrice = env.storage().persistent().get(&key)?;
+    // #453: never serve the v2 migration's zero placeholder as a price.
+    if result.price <= 0 {
+        return None;
+    }
 
     // max_age gating (if enabled)
     if max_age > 0 && result.timestamp.saturating_add(max_age) < ledger_time {
@@ -1449,6 +1453,10 @@ pub fn lastprice(env: &Env, asset: Asset) -> Option<PriceData> {
     }
     let agg_key = DataKey::Aggregate(addr.clone());
     let result: AggregatePrice = env.storage().persistent().get(&agg_key)?;
+    // #453: v2 migration writes a zero placeholder for unpriced assets; never serve it.
+    if result.price <= 0 {
+        return None;
+    }
     // #67: use per-asset resolution (falls back to contract-wide)
     let resolution = get_asset_resolution(env, addr.clone());
     if resolution > 0 {
