@@ -105,3 +105,4 @@ tests/
 openapi-*.yaml
 cargo_out.txt
 
+.blue-green/

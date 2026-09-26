@@ -2067,6 +2067,22 @@ pub struct PriceCommittedEvent {
     pub source: Address,
     pub round_ledger: u32,
     pub committed_at_ledger: u32,
+    /// The committed hash. Two sources publishing the same hash in the same
+    /// round is the forensic signature of a copy-commit attempt (#447).
+    pub hash: BytesN<32>,
+}
+
+/// Emitted when a source's unrevealed commit is slashed after the reveal
+/// window closes, identifying the withheld (asset, round) (#447).
+#[contractevent]
+#[derive(Clone)]
+pub struct CommitWithheldEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub source: Address,
+    pub round_ledger: u32,
+    pub slashed_amount: i128,
 }
 
 /// Emitted when a committed price is revealed.
@@ -2551,6 +2567,46 @@ pub struct TierFeePaidEvent {
     pub amount: i128,
 }
 
+// =============================================================================
+// #399 — Source diversity: effective independence events
+// =============================================================================
+
+/// Emitted when extended diversity metadata for a source is set/updated.
+///
+/// Topics: `source`
+#[contractevent]
+#[derive(Clone)]
+pub struct SourceDiversityUpdatedEvent {
+    #[topic]
+    pub source: Address,
+    pub infra: String,
+    pub upstream: String,
+    pub owner: String,
+}
+
+/// Emitted when diversity thresholds are changed by the admin.
+#[contractevent]
+#[derive(Clone)]
+pub struct DiversityThresholdsChangedEvent {
+    #[topic]
+    pub admin: Address,
+    pub min_effective_sources: u32,
+    pub max_hhi_per_axis: u32,
+}
+
+/// Emitted when the active source set breaches diversity thresholds:
+/// effective count below minimum OR any axis HHI above maximum — even when
+/// the raw source count looks healthy (the Sybil / nominal-diversity trap).
+#[contractevent]
+#[derive(Clone)]
+pub struct DiversityThresholdBreachedEvent {
+    pub raw_count: u32,
+    pub effective_independent_count: u32,
+    pub largest_domain_size: u32,
+    pub max_hhi: u32,
+    pub min_effective_required: u32,
+}
+
 /// Emitted when price history is pruned by timestamp cutoff.
 pub fn emit_history_pruned_by_timestamp(
     env: &soroban_sdk::Env,
@@ -2562,4 +2618,20 @@ pub fn emit_history_pruned_by_timestamp(
     let sym = soroban_sdk::symbol_short!("prune_ts");
     env.events()
         .publish((sym, asset), (ledger_seq, timestamp, cutoff));
+}
+
+/// Emitted when an asset aggregates with the freshness-weighted median (method 4).
+///
+/// `weights` are the capped per-submission weights, in the order of the
+/// contributing submissions, so the weighted result can be reconstructed.
+///
+/// Topics: `asset`
+#[contractevent]
+#[derive(Clone)]
+pub struct WeightedAggregationEvent {
+    #[topic]
+    pub asset: Address,
+    pub raw_median: i128,
+    pub weighted_median: i128,
+    pub weights: soroban_sdk::Vec<u32>,
 }

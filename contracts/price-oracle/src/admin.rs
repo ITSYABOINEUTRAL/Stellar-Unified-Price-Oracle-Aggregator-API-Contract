@@ -210,7 +210,9 @@ pub fn get_min_sources_required(env: &Env) -> u32 {
     env.storage()
         .persistent()
         .get(&key)
-        .unwrap_or(DEFAULT_MIN_SOURCES)
+        // Fail closed: `initialize` always writes this key, so a missing entry means it was
+        // evicted. Falling back to a permissive default would let a single source set prices.
+        .unwrap_or_else(|| panic_with_error!(env, ErrorCode::ConfigMissing))
 }
 
 pub fn set_max_history_length(env: &Env, new_max: u32) {
@@ -350,10 +352,11 @@ pub fn get_aggregation_method(env: &Env) -> u32 {
 /// * `1` — `Mean`
 /// * `2` — `TrimmedMean`
 /// * `3` — `WeightedMedian`
+/// * `4` — freshness-weighted median
 pub fn set_aggregation_method(env: &Env, method: u32) {
     let admin = get_admin(env);
     admin.require_auth();
-    if method > 3 {
+    if method > 4 {
         panic_with_error!(env, ErrorCode::InvalidConfiguration);
     }
     let old_method = get_aggregation_method(env);

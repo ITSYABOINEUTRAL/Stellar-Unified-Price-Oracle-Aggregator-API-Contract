@@ -28,6 +28,9 @@ type Query {
   """Get statistics for a specific source"""
   sourceStats(source: String!): SourceStatistics!
 
+  """Effective source-independence report (#399): raw vs effective counts plus per-axis HHI"""
+  sourceDiversity: SourceDiversityReport!
+
   """Get aggregated price data"""
   aggregatedPrices(
     assets: [String!]!
@@ -87,6 +90,22 @@ type Source {
   submissionCount: Int!
   lastSubmissionTime: Int
   registeredAt: Int!
+}
+
+"""Effective-independence diversity report (#399). Measures failure-domain
+independence (infra/upstream/owner), not jurisdiction labels."""
+type SourceDiversityReport {
+  rawCount: Int!
+  effectiveIndependentCount: Int!
+  regionHhi: Int!
+  providerHhi: Int!
+  jurisdictionHhi: Int!
+  infraHhi: Int!
+  upstreamHhi: Int!
+  ownerHhi: Int!
+  overallScore: Int!
+  largestDomainSize: Int!
+  isLowDiversity: Boolean!
 }
 
 """Statistics about a price source"""

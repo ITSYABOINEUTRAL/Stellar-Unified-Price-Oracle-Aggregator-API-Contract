@@ -1416,10 +1416,19 @@ pub fn set_source_geo(env: &Env, source: Address, metadata: SourceGeoMetadata) {
         .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
 
     SourceGeoUpdatedEvent {
+        source: source.clone(),
+        region: metadata.region.clone(),
+        provider: metadata.provider.clone(),
+        jurisdiction: metadata.jurisdiction.clone(),
+    }
+    .publish(env);
+    // #399: mirror the independence axes on a dedicated event so indexers
+    // do not need to decode the extended geo struct to track diversity.
+    crate::events::SourceDiversityUpdatedEvent {
         source,
-        region: metadata.region,
-        provider: metadata.provider,
-        jurisdiction: metadata.jurisdiction,
+        infra: metadata.infra,
+        upstream: metadata.upstream,
+        owner: metadata.owner,
     }
     .publish(env);
 }
