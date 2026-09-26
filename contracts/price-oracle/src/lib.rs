@@ -93,6 +93,7 @@ mod scheduling;
 mod signed_submission;
 mod simulate_batch;
 mod source_deviation;
+mod source_diversity;
 mod sources;
 mod state_channel;
 mod state_introspection;
@@ -270,6 +271,7 @@ pub use types::{
     ConsumerAccessMode, ConsumerInfo, ConsumerTier, ContractMetadata, ContribQualityRecord,
     CorrelationBand, CorrelationPair, CrossChainPriceEntry, CrossChainPricePayload,
     CrossChainRelayConfig, CrossReferenceResult, DataKey, DecentralizationReport, DemeritConfig,
+    DiversityThresholds,
     DeviationReport, DexPrice, DisqualificationStatus, EcosystemMetadata, EmergencyPause,
     ErrorCode, ExportedEntry, ExportedHistorySnapshot, ExternalDataProof, FeeMarketSubmission,
     FeedMetadata, FinalityStatus, FinalizedPrice, ForeignAssetMapping, FrozenPrice, GasRecord,
@@ -281,7 +283,8 @@ pub use types::{
     PriceData, PriceEntry, PriceEventPayload, PriceHistoryEntry, PriceOverrideEntry, PriceProof,
     ReferenceOracleEntry, RelayedSubmission, RelayerAssetStat, RelayerDashboard,
     RelayerFailureReason, RelayerInfo, Role, SimulationWarning, SoroswapPool, SourceDemeritState,
-    SourceDidLink, SourceGeoMetadata, SourceGovernance, SourceHealthStatus, SourceProposal,
+    SourceDidLink, SourceDiversityReport, SourceGeoMetadata, SourceGovernance, SourceHealthStatus,
+    SourceProposal,
     SourceRelayerDelegation, SourceRotationSchedule, SourceStakeRecord, SourceVerification,
     StateAnalysis, StateChannel, StateDiff, StateDiffEntry, StateDump, StellarHeader,
     StorageBatchRequest, StorageBatchResult, StorageBudget, StorageTtlEntry, SubscriptionExpiry,
@@ -1603,6 +1606,59 @@ impl PriceOracleContract {
 
     pub fn get_decentralization_report(env: Env) -> DecentralizationReport {
         sources::get_decentralization_report(&env)
+    }
+
+    // --- #399: Source diversity — effective independence ---
+    //
+    // `get_source_diversity` is the hardened successor to
+    // `get_decentralization_report`: it measures failure-domain independence
+    // (infra / upstream / owner) instead of counting jurisdiction labels, and
+    // reports `effective_independent_count` alongside the raw count so the
+    // Sybil / nominal-diversity trap is visible on dashboards and alerts.
+
+    pub fn get_source_diversity(env: Env) -> SourceDiversityReport {
+        source_diversity::get_source_diversity(&env)
+    }
+
+    pub fn set_source_diversity(
+        env: Env,
+        source: Address,
+        infra: String,
+        upstream: String,
+        owner: String,
+    ) {
+        reentrancy::enter(&env);
+        source_diversity::set_source_diversity(&env, source, infra, upstream, owner);
+        reentrancy::exit(&env);
+    }
+
+    pub fn set_diversity_thresholds(
+        env: Env,
+        min_effective_sources: u32,
+        max_hhi_per_axis: u32,
+    ) {
+        reentrancy::enter(&env);
+        source_diversity::set_diversity_thresholds(
+            &env,
+            min_effective_sources,
+            max_hhi_per_axis,
+        );
+        reentrancy::exit(&env);
+    }
+
+    pub fn get_diversity_thresholds(env: Env) -> DiversityThresholds {
+        source_diversity::get_diversity_thresholds(&env)
+    }
+
+    pub fn check_diversity_alert(env: Env) -> bool {
+        reentrancy::enter(&env);
+        let fired = source_diversity::check_diversity_alert(&env);
+        reentrancy::exit(&env);
+        fired
+    }
+
+    pub fn get_last_diversity_breach_ledger(env: Env) -> Option<u32> {
+        source_diversity::get_last_diversity_breach_ledger(&env)
     }
 
     // --- #209: Source Heartbeat Liveness Bond ---
@@ -5672,3 +5728,6 @@ mod issue_380_memory_allocation_tests;
 
 #[cfg(test)]
 mod issue_381_adaptive_ttl_tests;
+
+#[cfg(test)]
+mod source_diversity_tests;

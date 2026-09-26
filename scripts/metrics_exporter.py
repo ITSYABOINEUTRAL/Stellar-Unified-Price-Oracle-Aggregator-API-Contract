@@ -110,6 +110,15 @@ class EventIndex:
         self.errors_total: dict[int, int] = {}
         self.config_change_events_total: dict[str, int] = {}
 
+        # #399 source-diversity gauges (updated by diversity events +
+        # periodic get_source_diversity polling in production).
+        self.diversity_raw = 0
+        self.diversity_effective = 0
+        self.diversity_max_hhi = 0
+        self.diversity_low = 0
+        self.diversity_largest_domain = 0
+        self.diversity_breach_total = 0
+
     def handle_event(self, topics: list, data: dict, ledger_close_time: int) -> None:
         """Applies one decoded contract event to the running metric state.
 
@@ -198,6 +207,29 @@ class EventIndex:
                 code = int(data.get("code", -1))
                 self.errors_total[code] = self.errors_total.get(code, 0) + 1
 
+            elif name == "DiversityThresholdBreached":
+                # Fired by check_diversity_alert() even when raw_count is high.
+                self.diversity_raw = int(data.get("raw_count", self.diversity_raw))
+                self.diversity_effective = int(
+                    data.get("effective_independent_count", self.diversity_effective)
+                )
+                self.diversity_largest_domain = int(
+                    data.get("largest_domain_size", self.diversity_largest_domain)
+                )
+                self.diversity_max_hhi = int(data.get("max_hhi", self.diversity_max_hhi))
+                self.diversity_low = 1
+                self.diversity_breach_total += 1
+
+            elif name == "DiversityThresholdsChanged":
+                self.config_change_events_total["DiversityThresholdsChanged"] = (
+                    self.config_change_events_total.get("DiversityThresholdsChanged", 0) + 1
+                )
+
+            elif name == "SourceDiversityUpdated":
+                self.config_change_events_total["SourceDiversityUpdated"] = (
+                    self.config_change_events_total.get("SourceDiversityUpdated", 0) + 1
+                )
+
     def render(self, now: float) -> str:
         cid = self.contract_id
         lines: list[str] = []
@@ -209,6 +241,12 @@ class EventIndex:
         with self._lock:
             g("oracle_registered_sources_total", self.registered_sources_total)
             g("oracle_active_sources_total", self.active_sources_total)
+            g("oracle_diversity_raw", self.diversity_raw)
+            g("oracle_diversity_effective", self.diversity_effective)
+            g("oracle_diversity_max_hhi", self.diversity_max_hhi)
+            g("oracle_diversity_low", self.diversity_low)
+            g("oracle_diversity_largest_domain", self.diversity_largest_domain)
+            g("oracle_diversity_breach_total", self.diversity_breach_total)
             g("oracle_registered_assets_total", self.registered_assets_total)
             g("oracle_config_min_sources_required", self.min_sources_required)
             g("oracle_paused", self.paused)

@@ -2551,6 +2551,46 @@ pub struct TierFeePaidEvent {
     pub amount: i128,
 }
 
+// =============================================================================
+// #399 — Source diversity: effective independence events
+// =============================================================================
+
+/// Emitted when extended diversity metadata for a source is set/updated.
+///
+/// Topics: `source`
+#[contractevent]
+#[derive(Clone)]
+pub struct SourceDiversityUpdatedEvent {
+    #[topic]
+    pub source: Address,
+    pub infra: String,
+    pub upstream: String,
+    pub owner: String,
+}
+
+/// Emitted when diversity thresholds are changed by the admin.
+#[contractevent]
+#[derive(Clone)]
+pub struct DiversityThresholdsChangedEvent {
+    #[topic]
+    pub admin: Address,
+    pub min_effective_sources: u32,
+    pub max_hhi_per_axis: u32,
+}
+
+/// Emitted when the active source set breaches diversity thresholds:
+/// effective count below minimum OR any axis HHI above maximum — even when
+/// the raw source count looks healthy (the Sybil / nominal-diversity trap).
+#[contractevent]
+#[derive(Clone)]
+pub struct DiversityThresholdBreachedEvent {
+    pub raw_count: u32,
+    pub effective_independent_count: u32,
+    pub largest_domain_size: u32,
+    pub max_hhi: u32,
+    pub min_effective_required: u32,
+}
+
 /// Emitted when price history is pruned by timestamp cutoff.
 pub fn emit_history_pruned_by_timestamp(
     env: &soroban_sdk::Env,

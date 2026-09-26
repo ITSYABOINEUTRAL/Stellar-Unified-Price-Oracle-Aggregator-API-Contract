@@ -2504,11 +2504,17 @@ fn test_source_geolocation_metrics() {
         region: String::from_str(&e, "US"),
         provider: String::from_str(&e, "AWS"),
         jurisdiction: String::from_str(&e, "US"),
+        infra: String::from_str(&e, "aws-us-east-1"),
+        upstream: String::from_str(&e, "coinbase"),
+        owner: String::from_str(&e, "operator-a"),
     };
     let geo2 = crate::SourceGeoMetadata {
         region: String::from_str(&e, "EU"),
         provider: String::from_str(&e, "AWS"),
         jurisdiction: String::from_str(&e, "DE"),
+        infra: String::from_str(&e, "aws-eu-west-1"),
+        upstream: String::from_str(&e, "kraken"),
+        owner: String::from_str(&e, "operator-b"),
     };
 
     // Initially both should return None
