@@ -29,6 +29,8 @@ jobs:
         run: make build
       - name: Run clippy
         run: make lint
+      - name: Gas-budget gates
+        run: make gas-gate
       - name: Run tests
         run: make test
 

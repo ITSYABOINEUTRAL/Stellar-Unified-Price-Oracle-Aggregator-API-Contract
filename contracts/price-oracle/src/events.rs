@@ -2067,6 +2067,22 @@ pub struct PriceCommittedEvent {
     pub source: Address,
     pub round_ledger: u32,
     pub committed_at_ledger: u32,
+    /// The committed hash. Two sources publishing the same hash in the same
+    /// round is the forensic signature of a copy-commit attempt (#447).
+    pub hash: BytesN<32>,
+}
+
+/// Emitted when a source's unrevealed commit is slashed after the reveal
+/// window closes, identifying the withheld (asset, round) (#447).
+#[contractevent]
+#[derive(Clone)]
+pub struct CommitWithheldEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub source: Address,
+    pub round_ledger: u32,
+    pub slashed_amount: i128,
 }
 
 /// Emitted when a committed price is revealed.

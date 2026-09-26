@@ -5639,6 +5639,10 @@ mod commit_reveal_tests;
 
 #[cfg(test)]
 mod bft_tests;
+#[cfg(test)]
+mod gas_budget_tests;
+#[cfg(test)]
+mod load_v2_tests;
 
 #[cfg(test)]
 mod finality_tests;
