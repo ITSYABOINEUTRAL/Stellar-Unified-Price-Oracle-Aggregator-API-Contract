@@ -2835,3 +2835,67 @@ pub struct TokenSubscriptionRecord {
     pub expiry_timestamp: u64,
     pub deposited_amount: i128,
 }
+
+/// Partial aggregation policy; `None` fields inherit from the next layer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PolicyOverride {
+    /// Aggregation method (0..=4, see `AggregationMethod`).
+    pub method: Option<u32>,
+    /// Minimum contributing sources (quorum).
+    pub min_sources: Option<u32>,
+    /// Maximum submission age in seconds.
+    pub freshness_secs: Option<u64>,
+    /// Maximum deviation from the median in basis points.
+    pub max_deviation_bps: Option<u32>,
+}
+
+/// Fully resolved aggregation policy with the layer that supplied each field
+/// (0 = global default, 1 = asset class, 2 = asset override).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct EffectivePolicy {
+    pub method: u32,
+    pub min_sources: u32,
+    /// 0 = no freshness limit.
+    pub freshness_secs: u64,
+    /// 0 = deviation filter disabled.
+    pub max_deviation_bps: u32,
+    pub method_layer: u32,
+    pub min_sources_layer: u32,
+    pub freshness_layer: u32,
+    pub max_deviation_layer: u32,
+}
+
+/// Linear freshness decay: full weight at age 0, `min_weight` at `window_secs`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct FreshnessCurve {
+    pub window_secs: u64,
+    pub min_weight: u32,
+}
+
+/// Raw and freshness-weighted medians plus the weight applied to each source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct WeightedAggregate {
+    pub raw_median: i128,
+    pub weighted_median: i128,
+    pub sources: soroban_sdk::Vec<Address>,
+    pub weights: soroban_sdk::Vec<u32>,
+}
+
+/// TWAP value together with the observation statistics backing it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct TwapResult {
+    pub price: i128,
+    pub timestamp: u64,
+    pub last_updated: u32,
+    /// Distinct observations (ledger segments) inside the window.
+    pub cardinality: u32,
+    /// Largest single-observation share of the window, in basis points.
+    pub max_weight_bps: u32,
+    /// True when the whole window rests on a single observation.
+    pub concentrated: bool,
+}

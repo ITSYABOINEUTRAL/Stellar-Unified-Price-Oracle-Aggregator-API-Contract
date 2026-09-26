@@ -352,10 +352,11 @@ pub fn get_aggregation_method(env: &Env) -> u32 {
 /// * `1` — `Mean`
 /// * `2` — `TrimmedMean`
 /// * `3` — `WeightedMedian`
+/// * `4` — freshness-weighted median
 pub fn set_aggregation_method(env: &Env, method: u32) {
     let admin = get_admin(env);
     admin.require_auth();
-    if method > 3 {
+    if method > 4 {
         panic_with_error!(env, ErrorCode::InvalidConfiguration);
     }
     let old_method = get_aggregation_method(env);
