@@ -99,3 +99,22 @@ groups:
           severity: warning
         annotations:
           summary: "Source reliability scoring has not recomputed scores in over 30m"
+
+      # #399 source diversity — effective independence (see docs/source-diversity.md).
+      # Fires on LOW EFFECTIVE diversity even when the raw count looks healthy
+      # (the Sybil / nominal-diversity trap: 10 names, 1 failure domain).
+      - alert: LowEffectiveDiversity
+        expr: oracle_diversity_low == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Effective independent sources below threshold (raw {{ $value }} may still look healthy — check get_source_diversity)"
+
+      - alert: DiversityConcentrationHigh
+        expr: oracle_diversity_max_hhi > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "One diversity axis is over-concentrated (HHI {{ $value }} > 5000) — single cloud/upstream/owner failure risk"

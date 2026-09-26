@@ -327,8 +327,10 @@ pub enum ErrorCode {
     InvalidExternalProof = 152,
     /// The source's stake could not be slashed.
     SlashFailed = 153,
-    /// The relayer's bond is locked while failure reports (a pending dispute) are outstanding.
-    RelayerBondLocked = 154,
-    /// A required configuration entry is missing (e.g. evicted by TTL expiry).
-    ConfigMissing = 155,
+
+    // ── 154–155: Source diversity — effective independence (#399) ─────────────
+    /// The active source set is below the configured effective-independence threshold.
+    LowSourceDiversity = 154,
+    /// The supplied diversity thresholds are invalid (e.g. max HHI > 10000).
+    InvalidDiversityThresholds = 155,
 }
