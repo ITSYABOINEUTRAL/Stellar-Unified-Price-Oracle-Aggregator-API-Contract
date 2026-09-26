@@ -5672,3 +5672,15 @@ mod issue_380_memory_allocation_tests;
 
 #[cfg(test)]
 mod issue_381_adaptive_ttl_tests;
+
+#[cfg(test)]
+mod cross_chain_replay_audit_tests;
+
+#[cfg(test)]
+mod decoder_forgery_tests;
+
+#[cfg(test)]
+mod admin_compromise_tests;
+
+#[cfg(test)]
+mod timelock_bypass_tests;
