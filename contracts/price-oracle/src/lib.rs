@@ -43,6 +43,8 @@ pub(crate) mod core_pricing;
 // against the pure core, so expose storage under the same feature.
 mod audit_log;
 mod batch_storage;
+#[allow(dead_code)]
+mod blue_green;
 mod config_history;
 mod contribution_quality;
 mod correlation;
@@ -62,6 +64,8 @@ mod exotic_pricing;
 mod export_history;
 mod fee_market;
 mod finality;
+#[allow(dead_code)]
+mod flash_swing;
 mod freeze;
 mod gas_metering;
 mod health;
