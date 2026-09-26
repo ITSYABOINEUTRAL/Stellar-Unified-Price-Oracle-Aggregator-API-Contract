@@ -3484,6 +3484,10 @@ impl PriceOracleContract {
     /// Withdraws the entire deposited performance bond back to `relayer`.
     ///
     /// The relayer must authorize this call. A no-op if nothing is deposited.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::RelayerBondLocked`] — failure reports are outstanding.
     pub fn withdraw_relayer_bond(env: Env, relayer: Address) {
         relayer_bonds::withdraw_relayer_bond(&env, relayer);
     }
@@ -5672,3 +5676,6 @@ mod issue_380_memory_allocation_tests;
 
 #[cfg(test)]
 mod issue_381_adaptive_ttl_tests;
+
+#[cfg(test)]
+mod adversarial_security_tests;
