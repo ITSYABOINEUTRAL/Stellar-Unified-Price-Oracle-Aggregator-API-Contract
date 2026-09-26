@@ -2563,3 +2563,19 @@ pub fn emit_history_pruned_by_timestamp(
     env.events()
         .publish((sym, asset), (ledger_seq, timestamp, cutoff));
 }
+
+/// Emitted when an asset aggregates with the freshness-weighted median (method 4).
+///
+/// `weights` are the capped per-submission weights, in the order of the
+/// contributing submissions, so the weighted result can be reconstructed.
+///
+/// Topics: `asset`
+#[contractevent]
+#[derive(Clone)]
+pub struct WeightedAggregationEvent {
+    #[topic]
+    pub asset: Address,
+    pub raw_median: i128,
+    pub weighted_median: i128,
+    pub weights: soroban_sdk::Vec<u32>,
+}

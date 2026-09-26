@@ -327,4 +327,6 @@ pub enum ErrorCode {
     InvalidExternalProof = 152,
     /// The source's stake could not be slashed.
     SlashFailed = 153,
+    /// The TWAP window has fewer distinct observations than the configured floor.
+    TwapInsufficientObservations = 154,
 }

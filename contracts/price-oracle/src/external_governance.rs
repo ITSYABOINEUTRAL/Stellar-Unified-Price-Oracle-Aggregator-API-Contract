@@ -13,12 +13,25 @@
 //! | Key | Type | Description |
 //! |-----|------|-------------|
 //! | `ExternalGovernor` | `Address` | Currently delegated governor |
-//! | `GovernorAllowedOp(name)` | `bool` | Allow-list flag per operation name |
+//! | `GovernorEpoch` | `u32` | Authorization epoch; bumping it revokes every grant |
+//! | `GovernorOpGrant(name)` | `u32` | Epoch at which `name` was allow-listed |
+//!
+//! ## Trust model
+//!
+//! * The admin always outranks the governor: every function in this module
+//!   requires admin auth, so the governor can never change its own authority.
+//! * A grant is only valid in the epoch it was made. Installing, replacing or
+//!   clearing a governor, or calling [`reauthorize_governor`] (e.g. after the
+//!   external contract was upgraded), starts a new epoch, so trust is never
+//!   inherited by a new governor or a new governor implementation.
+//! * The oracle makes no calls into the governor, so it can neither block nor
+//!   re-enter oracle operations. See `docs/governance-attack-surface-audit.md`.
 
-use soroban_sdk::{Address, Env, String};
+use soroban_sdk::{panic_with_error, symbol_short, Address, Bytes, Env, String};
 
+use crate::events::emit_admin_action;
 use crate::storage::{get_admin, LEDGER_BUMP, LEDGER_THRESHOLD};
-use crate::types::DataKey;
+use crate::types::{DataKey, ErrorCode};
 
 /// Delegates governance to `governor`.
 ///
@@ -27,6 +40,10 @@ use crate::types::DataKey;
 pub fn set_external_governor(env: &Env, governor: Address) {
     let admin = get_admin(env);
     admin.require_auth();
+    if governor == env.current_contract_address() {
+        panic_with_error!(env, ErrorCode::InvalidConfiguration);
+    }
+    bump_epoch(env);
 
     let key = DataKey::ExternalGovernor;
     env.storage().persistent().set(&key, &governor);
@@ -60,6 +77,35 @@ pub fn clear_external_governor(env: &Env) {
     env.storage()
         .persistent()
         .remove(&DataKey::ExternalGovernor);
+    bump_epoch(env);
+}
+
+/// Current governor authorization epoch.
+pub fn get_governor_epoch(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::GovernorEpoch)
+        .unwrap_or(0)
+}
+
+fn bump_epoch(env: &Env) {
+    let key = DataKey::GovernorEpoch;
+    env.storage()
+        .persistent()
+        .set(&key, &get_governor_epoch(env).saturating_add(1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
+}
+
+/// Revokes every operation grant, requiring each to be allow-listed again.
+///
+/// Admin only. Call after the external governor contract is upgraded.
+pub fn reauthorize_governor(env: &Env) {
+    let admin = get_admin(env);
+    admin.require_auth();
+    bump_epoch(env);
+    emit_admin_action(env, symbol_short!("gov_reset"), admin, Bytes::new(env));
 }
 
 /// Allow-lists `operation` for the external governor.
@@ -69,8 +115,10 @@ pub fn allow_governor_op(env: &Env, operation: String) {
     let admin = get_admin(env);
     admin.require_auth();
 
-    let key = DataKey::GovernorAllowedOp(operation);
-    env.storage().persistent().set(&key, &true);
+    let key = DataKey::GovernorOpGrant(operation);
+    env.storage()
+        .persistent()
+        .set(&key, &get_governor_epoch(env));
     env.storage()
         .persistent()
         .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
@@ -85,13 +133,14 @@ pub fn disallow_governor_op(env: &Env, operation: String) {
 
     env.storage()
         .persistent()
-        .remove(&DataKey::GovernorAllowedOp(operation));
+        .remove(&DataKey::GovernorOpGrant(operation));
 }
 
 /// Returns whether the external governor may perform `operation`.
 pub fn is_governor_op_allowed(env: &Env, operation: String) -> bool {
-    env.storage()
+    let granted: Option<u32> = env
+        .storage()
         .persistent()
-        .get(&DataKey::GovernorAllowedOp(operation))
-        .unwrap_or(false)
+        .get(&DataKey::GovernorOpGrant(operation));
+    granted == Some(get_governor_epoch(env))
 }

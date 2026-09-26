@@ -162,6 +162,10 @@ mod cross_chain_relay;
 // Cross-contract governance delegation (narrow, allow-listed governor powers).
 mod external_governance;
 
+// Per-asset aggregation policy and freshness-weighted median.
+mod freshness_weight;
+mod policy;
+
 #[cfg(test)]
 mod circuit_breaker_tests;
 
@@ -270,24 +274,24 @@ pub use types::{
     ConsumerAccessMode, ConsumerInfo, ConsumerTier, ContractMetadata, ContribQualityRecord,
     CorrelationBand, CorrelationPair, CrossChainPriceEntry, CrossChainPricePayload,
     CrossChainRelayConfig, CrossReferenceResult, DataKey, DecentralizationReport, DemeritConfig,
-    DeviationReport, DexPrice, DisqualificationStatus, EcosystemMetadata, EmergencyPause,
-    ErrorCode, ExportedEntry, ExportedHistorySnapshot, ExternalDataProof, FeeMarketSubmission,
-    FeedMetadata, FinalityStatus, FinalizedPrice, ForeignAssetMapping, FrozenPrice, GasRecord,
-    Groth16Proof, Groth16VerifyingKey, GuardianRecovery, HealthReport, MigrationState,
-    MigrationStatus, MultiSigOperation, NotificationPreference, Operation, OperationKind,
-    OperationPriority, OperationSimulationResult, OperationStatus, OperationTemplate,
-    OperationType, OptimisticProposal, OptimisticProposalStatus, OracleSources, PendingBatch,
-    PendingFeeSubmissions, PendingFinalityEntry, PendingOperation, PriceBounds, PriceCommit,
-    PriceData, PriceEntry, PriceEventPayload, PriceHistoryEntry, PriceOverrideEntry, PriceProof,
-    ReferenceOracleEntry, RelayedSubmission, RelayerAssetStat, RelayerDashboard,
-    RelayerFailureReason, RelayerInfo, Role, SimulationWarning, SoroswapPool, SourceDemeritState,
-    SourceDidLink, SourceGeoMetadata, SourceGovernance, SourceHealthStatus, SourceProposal,
-    SourceRelayerDelegation, SourceRotationSchedule, SourceStakeRecord, SourceVerification,
-    StateAnalysis, StateChannel, StateDiff, StateDiffEntry, StateDump, StellarHeader,
-    StorageBatchRequest, StorageBatchResult, StorageBudget, StorageTtlEntry, SubscriptionExpiry,
-    SubscriptionPayment, SubscriptionPlan, SubscriptionPlans, TemplateStep, TotalStorageBudget,
-    TwapMethod, VersionedAggregatePrice, WormholeGuardianSet, WormholePricePayload, WormholeVaa,
-    ZkPriceAttestation,
+    DeviationReport, DexPrice, DisqualificationStatus, EcosystemMetadata, EffectivePolicy,
+    EmergencyPause, ErrorCode, ExportedEntry, ExportedHistorySnapshot, ExternalDataProof,
+    FeeMarketSubmission, FeedMetadata, FinalityStatus, FinalizedPrice, ForeignAssetMapping,
+    FreshnessCurve, FrozenPrice, GasRecord, Groth16Proof, Groth16VerifyingKey, GuardianRecovery,
+    HealthReport, MigrationState, MigrationStatus, MultiSigOperation, NotificationPreference,
+    Operation, OperationKind, OperationPriority, OperationSimulationResult, OperationStatus,
+    OperationTemplate, OperationType, OptimisticProposal, OptimisticProposalStatus, OracleSources,
+    PendingBatch, PendingFeeSubmissions, PendingFinalityEntry, PendingOperation, PolicyOverride,
+    PriceBounds, PriceCommit, PriceData, PriceEntry, PriceEventPayload, PriceHistoryEntry,
+    PriceOverrideEntry, PriceProof, ReferenceOracleEntry, RelayedSubmission, RelayerAssetStat,
+    RelayerDashboard, RelayerFailureReason, RelayerInfo, Role, SimulationWarning, SoroswapPool,
+    SourceDemeritState, SourceDidLink, SourceGeoMetadata, SourceGovernance, SourceHealthStatus,
+    SourceProposal, SourceRelayerDelegation, SourceRotationSchedule, SourceStakeRecord,
+    SourceVerification, StateAnalysis, StateChannel, StateDiff, StateDiffEntry, StateDump,
+    StellarHeader, StorageBatchRequest, StorageBatchResult, StorageBudget, StorageTtlEntry,
+    SubscriptionExpiry, SubscriptionPayment, SubscriptionPlan, SubscriptionPlans, TemplateStep,
+    TotalStorageBudget, TwapMethod, TwapResult, VersionedAggregatePrice, WeightedAggregate,
+    WormholeGuardianSet, WormholePricePayload, WormholeVaa, ZkPriceAttestation,
 };
 
 use soroban_sdk::{
@@ -5617,6 +5621,91 @@ impl PriceOracleContract {
     pub fn is_governor_op_allowed(env: Env, operation: String) -> bool {
         external_governance::is_governor_op_allowed(&env, operation)
     }
+
+    /// Revokes every governor operation grant (new authorization epoch).
+    ///
+    /// Admin only. Call after the external governor contract is upgraded.
+    pub fn reauthorize_governor(env: Env) {
+        external_governance::reauthorize_governor(&env);
+    }
+
+    /// Returns the current governor authorization epoch.
+    pub fn get_governor_epoch(env: Env) -> u32 {
+        external_governance::get_governor_epoch(&env)
+    }
+
+    // ── Per-asset aggregation policy ─────────────────────────────────────────
+
+    /// Sets (or clears with `None`) an asset's aggregation policy override. Admin only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::InvalidConfiguration`] — a field is out of bounds.
+    pub fn set_asset_policy(env: Env, asset: Address, policy: Option<PolicyOverride>) {
+        policy::set_asset_policy(&env, asset, policy);
+    }
+
+    /// Sets (or clears with `None`) an asset class's policy override. Admin only.
+    pub fn set_class_policy(env: Env, class: u32, policy: Option<PolicyOverride>) {
+        policy::set_class_policy(&env, class, policy);
+    }
+
+    /// Assigns an asset to a class (or unassigns with `None`). Admin only.
+    pub fn set_asset_class(env: Env, asset: Address, class: Option<u32>) {
+        policy::set_asset_class(&env, asset, class);
+    }
+
+    /// Returns the effective policy of an asset and the layer supplying each field
+    /// (0 = global, 1 = class, 2 = asset).
+    pub fn get_effective_policy(env: Env, asset: Address) -> EffectivePolicy {
+        policy::effective_policy(&env, &asset)
+    }
+
+    /// Returns the raw per-asset override, if one is set.
+    pub fn get_asset_policy(env: Env, asset: Address) -> Option<PolicyOverride> {
+        policy::get_asset_policy(&env, &asset)
+    }
+
+    // ── Freshness-weighted median ────────────────────────────────────────────
+
+    /// Configures an asset's freshness weighting curve. Admin only.
+    pub fn set_freshness_curve(env: Env, asset: Address, window_secs: u64, min_weight: u32) {
+        freshness_weight::set_curve(&env, asset, window_secs, min_weight);
+    }
+
+    /// Returns an asset's freshness weighting curve (default when unset).
+    pub fn get_freshness_curve(env: Env, asset: Address) -> FreshnessCurve {
+        freshness_weight::get_curve(&env, &asset)
+    }
+
+    /// Returns raw and freshness-weighted medians with the per-source weights.
+    pub fn get_weighted_aggregate(env: Env, asset: Address) -> Option<WeightedAggregate> {
+        freshness_weight::get_weighted_aggregate(&env, &asset)
+    }
+
+    // ── TWAP observation cardinality ─────────────────────────────────────────
+
+    /// Sets the minimum distinct observations a TWAP window needs (1..=64). Admin only.
+    pub fn set_twap_min_cardinality(env: Env, min_cardinality: u32) {
+        prices::set_twap_min_cardinality(&env, min_cardinality);
+    }
+
+    /// Returns the TWAP cardinality floor.
+    pub fn get_twap_min_cardinality(env: Env) -> u32 {
+        prices::get_twap_min_cardinality(&env)
+    }
+
+    /// TWAP together with its observation cardinality.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::TwapInsufficientObservations`] — fewer observations than the floor.
+    pub fn get_twap_ex(
+        env: Env,
+        asset: Address,
+        window_ledgers: u32,
+        method: TwapMethod,
+    ) -> Option<TwapResult> {
+        prices::get_twap_ex(&env, Asset::Stellar(asset), window_ledgers, method)
+    }
 }
 
 #[cfg(test)]
@@ -5672,3 +5761,6 @@ mod issue_380_memory_allocation_tests;
 
 #[cfg(test)]
 mod issue_381_adaptive_ttl_tests;
+
+#[cfg(test)]
+mod issues_470_477_tests;

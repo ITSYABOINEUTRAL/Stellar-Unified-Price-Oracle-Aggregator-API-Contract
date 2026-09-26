@@ -25,6 +25,7 @@ use crate::storage::{
 use crate::types::{
     AggregatePrice, Asset, BftAggregationMethod, CompactionMetadata, DataKey, ErrorCode,
     OracleSources, PriceData, PriceEntry, PriceHistoryEntry, PriceOverrideEntry, TwapMethod,
+    TwapResult,
 };
 // Issue #290 — record submission against schedule (liveness check)
 use crate::scheduling;
@@ -37,7 +38,7 @@ fn build_candidate_aggregate(
     timestamp: u64,
     decimals: u32,
 ) -> Option<AggregatePrice> {
-    let min_required = get_min_sources_required(env);
+    let min_required = crate::policy::effective_policy(env, asset).min_sources;
     let oracle_sources: OracleSources = read_oracle_sources(env);
     let total_sources = oracle_sources.sources.len();
 
@@ -97,7 +98,7 @@ fn build_candidate_aggregate(
     }
 
     if contributing_sources >= min_required && !valid_prices.is_empty() {
-        let aggregated_price = aggregate_prices(env, &valid_prices, &valid_volumes);
+        let aggregated_price = aggregate_prices(env, asset, &valid_prices, &valid_volumes);
         Some(AggregatePrice {
             price: aggregated_price,
             timestamp: latest_timestamp,
@@ -148,14 +149,14 @@ fn read_commit_reveal_slash_amount(env: &Env) -> i128 {
         .unwrap_or(0)
 }
 
-fn aggregate_prices(env: &Env, prices: &Vec<i128>, volumes: &Vec<i128>) -> i128 {
+fn aggregate_prices(env: &Env, asset: &Address, prices: &Vec<i128>, volumes: &Vec<i128>) -> i128 {
     let bft_fault_tolerance = read_bft_fault_tolerance(env);
     if bft_fault_tolerance > 0 {
         let method = read_bft_aggregation_method(env);
         return aggregate_bft_prices(env, prices, bft_fault_tolerance, method);
     }
 
-    let method = get_aggregation_method(env);
+    let method = crate::policy::effective_policy(env, asset).method;
     match method {
         0 => compute_median(prices),
         1 => compute_mean(prices),
@@ -478,7 +479,7 @@ fn count_contributing_sources(env: &Env, asset: &Address, current_ledger: u32) -
 }
 
 fn maybe_aggregate_after_submission(env: &Env, asset: &Address, current_ledger: u32) -> bool {
-    let min_required = get_min_sources_required(env);
+    let min_required = crate::policy::effective_policy(env, asset).min_sources;
     let contributing_sources = count_contributing_sources(env, asset, current_ledger);
     if contributing_sources >= min_required {
         return true;
@@ -498,7 +499,8 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
     let max_events = get_max_events_per_call(env);
     let mut event_count: u32 = 0;
 
-    let min_required = get_min_sources_required(env);
+    let policy = crate::policy::effective_policy(env, asset);
+    let min_required = policy.min_sources;
     let oracle_sources: OracleSources = read_oracle_sources(env);
     let total_sources = oracle_sources.sources.len();
 
@@ -542,6 +544,8 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
 
     let mut valid_prices: Vec<i128> = Vec::new(env);
     let mut valid_volumes: Vec<i128> = Vec::new(env);
+    let mut valid_weights: Vec<u32> = Vec::new(env);
+    let curve = crate::freshness_weight::get_curve(env, asset);
     let mut latest_timestamp: u64 = 0;
     let mut contributing_sources: u32 = 0;
 
@@ -599,17 +603,59 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
             env.storage()
                 .persistent()
                 .extend_ttl(&sub_key, LEDGER_THRESHOLD, LEDGER_BUMP);
+            // Per-asset freshness bound (policy layer); 0 means unlimited.
+            if policy.freshness_secs > 0
+                && env
+                    .ledger()
+                    .timestamp()
+                    .saturating_sub(entry_data.ledger_timestamp)
+                    > policy.freshness_secs
+            {
+                continue;
+            }
             if entry_data.timestamp > latest_timestamp {
                 latest_timestamp = entry_data.timestamp;
             }
             valid_prices.push_back(entry_data.price);
             valid_volumes.push_back(entry_data.volume.unwrap_or(0));
+            valid_weights.push_back(crate::freshness_weight::entry_weight(
+                env,
+                &entry_data,
+                &curve,
+            ));
             contributing_sources += 1;
         }
     }
 
+    if policy.max_deviation_bps > 0 {
+        let (p, v, w) = crate::policy::filter_deviation(
+            env,
+            &valid_prices,
+            &valid_volumes,
+            &valid_weights,
+            policy.max_deviation_bps,
+        );
+        valid_prices = p;
+        valid_volumes = v;
+        valid_weights = w;
+        contributing_sources = valid_prices.len();
+    }
+
     if contributing_sources >= min_required && !valid_prices.is_empty() {
-        let median_price = aggregate_prices(env, &valid_prices, &valid_volumes);
+        let median_price = if policy.method == 4 && read_bft_fault_tolerance(env) == 0 {
+            let weights = crate::freshness_weight::capped(env, &valid_weights);
+            let weighted = crate::freshness_weight::aggregate(&valid_prices, &weights);
+            crate::events::WeightedAggregationEvent {
+                asset: asset.clone(),
+                raw_median: compute_median(&valid_prices),
+                weighted_median: weighted,
+                weights,
+            }
+            .publish(env);
+            weighted
+        } else {
+            aggregate_prices(env, asset, &valid_prices, &valid_volumes)
+        };
 
         let agg_key = DataKey::Aggregate(asset.clone());
         let prev_aggregate: AggregatePrice =
@@ -1070,6 +1116,25 @@ fn compute_twap_window(
     current_ledger: u32,
     method: TwapMethod,
 ) -> Option<PriceData> {
+    compute_twap_stats(env, asset, start_ledger, current_ledger, method).map(|r| PriceData {
+        price: r.price,
+        timestamp: r.timestamp,
+        last_updated: r.last_updated,
+    })
+}
+
+/// Time-weighted TWAP plus observation statistics.
+///
+/// Each history snapshot is one observation (history holds one entry per
+/// ledger, so repeated submissions within a ledger add no weight) and is
+/// weighted by the number of ledgers it stays in force inside the window.
+fn compute_twap_stats(
+    env: &Env,
+    asset: &Address,
+    start_ledger: u32,
+    current_ledger: u32,
+    method: TwapMethod,
+) -> Option<TwapResult> {
     let agg_key = DataKey::Aggregate(asset.clone());
     let current_agg: AggregatePrice = env.storage().persistent().get(&agg_key)?;
     let mut snapshots: Vec<(u32, i128)> = Vec::new(env);
@@ -1093,6 +1158,8 @@ fn compute_twap_window(
     let mut weighted_price: i128 = 0;
     let mut weighted_log2: i128 = 0;
     let mut next_boundary = current_ledger.saturating_add(1);
+    let mut cardinality: u32 = 0;
+    let mut max_weight: u32 = 0;
 
     for i in 0..snapshots.len() {
         let (ledger, price) = snapshots.get_unchecked(i);
@@ -1103,6 +1170,8 @@ fn compute_twap_window(
         };
         if next_boundary > segment_start {
             let weight = next_boundary - segment_start;
+            cardinality += 1;
+            max_weight = max_weight.max(weight);
             total_weight = total_weight.saturating_add(weight as u64);
             weighted_price = weighted_price.saturating_add(price.saturating_mul(weight as i128));
             if method == TwapMethod::Geometric {
@@ -1128,10 +1197,14 @@ fn compute_twap_window(
         }
     };
 
-    Some(PriceData {
+    let max_weight_bps = ((max_weight as u64) * 10_000 / total_weight) as u32;
+    Some(TwapResult {
         price,
         timestamp: env.ledger().timestamp(),
         last_updated: current_ledger,
+        cardinality,
+        max_weight_bps,
+        concentrated: cardinality == 1,
     })
 }
 
@@ -1571,6 +1644,49 @@ pub fn get_twap(
     window_ledgers: u32,
     method: TwapMethod,
 ) -> Option<PriceData> {
+    get_twap_ex(env, asset, window_ledgers, method).map(|r| PriceData {
+        price: r.price,
+        timestamp: r.timestamp,
+        last_updated: r.last_updated,
+    })
+}
+
+pub const MAX_TWAP_MIN_CARDINALITY: u32 = 64;
+
+/// Returns the configured TWAP cardinality floor (default 1).
+pub fn get_twap_min_cardinality(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::TwapMinCardinality)
+        .unwrap_or(1)
+}
+
+/// Sets the TWAP cardinality floor. Admin only; must be in `1..=64`.
+pub fn set_twap_min_cardinality(env: &Env, min_cardinality: u32) {
+    let admin = get_admin(env);
+    admin.require_auth();
+    if min_cardinality == 0 || min_cardinality > MAX_TWAP_MIN_CARDINALITY {
+        panic_with_error!(env, ErrorCode::InvalidConfiguration);
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::TwapMinCardinality, &min_cardinality);
+    env.storage().persistent().extend_ttl(
+        &DataKey::TwapMinCardinality,
+        LEDGER_THRESHOLD,
+        LEDGER_BUMP,
+    );
+}
+
+/// TWAP with observation statistics. Fails closed with
+/// `TwapInsufficientObservations` when the window holds fewer distinct
+/// observations than the configured floor.
+pub fn get_twap_ex(
+    env: &Env,
+    asset: Asset,
+    window_ledgers: u32,
+    method: TwapMethod,
+) -> Option<TwapResult> {
     let addr = match asset {
         Asset::Stellar(a) => a,
         Asset::Other(_) => return None,
@@ -1584,7 +1700,11 @@ pub fn get_twap(
     }
     let current_ledger = env.ledger().sequence();
     let start_ledger = current_ledger.saturating_sub(window_ledgers.saturating_sub(1));
-    compute_twap_window(env, &addr, start_ledger, current_ledger, method)
+    let result = compute_twap_stats(env, &addr, start_ledger, current_ledger, method)?;
+    if result.cardinality < get_twap_min_cardinality(env) {
+        panic_with_error!(env, ErrorCode::TwapInsufficientObservations);
+    }
+    Some(result)
 }
 
 pub fn override_price(env: &Env, asset: Address, price: i128, reason: String, expiry_ledger: u32) {
@@ -1704,7 +1824,7 @@ pub fn trigger_aggregation(env: &Env, asset: Address) {
     // Re-aggregate from stored submissions
     let oracle_sources: OracleSources = read_oracle_sources(env);
     let total_sources = oracle_sources.sources.len();
-    let min_required = get_min_sources_required(env);
+    let min_required = crate::policy::effective_policy(env, &asset).min_sources;
     let decimals = get_decimals(env);
 
     let mut valid_prices: Vec<i128> = Vec::new(env);
@@ -1741,7 +1861,7 @@ pub fn trigger_aggregation(env: &Env, asset: Address) {
     }
 
     if contributing_sources >= min_required && !valid_prices.is_empty() {
-        let agg_price = aggregate_prices(env, &valid_prices, &valid_volumes);
+        let agg_price = aggregate_prices(env, &asset, &valid_prices, &valid_volumes);
 
         let aggregate = AggregatePrice {
             price: agg_price,
