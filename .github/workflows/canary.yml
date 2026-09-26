@@ -1,0 +1,89 @@
+name: Canary
+
+# Canary deployment pipeline (#414). See docs/canary-deployment.md.
+on:
+  pull_request:
+    paths: ["services/canary/**", "scripts/canary.sh", ".github/workflows/canary.yml"]
+  workflow_dispatch:
+    inputs:
+      blue_contract:
+        description: "Live (blue) contract id"
+        required: true
+      canary_bps:
+        description: "Share of assets routed to green, in basis points"
+        default: "1000"
+
+jobs:
+  selftest:
+    # Proves a deliberately divergent green is caught and rolled back.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest -q services/canary
+
+  canary:
+    if: github.event_name == 'workflow_dispatch'
+    needs: selftest
+    runs-on: ubuntu-latest
+    environment: testnet
+    outputs:
+      green_contract: ${{ steps.deploy.outputs.green }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          targets: wasm32v1-none
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL https://github.com/stellar/stellar-cli/releases/download/v26.1.0/stellar-cli-26.1.0-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+          echo "${{ secrets.CANARY_SECRET_KEY }}" | stellar keys add canary --secret-key
+      - name: Build and deploy green
+        id: deploy
+        run: |
+          make build
+          GREEN=$(stellar contract deploy --wasm target/wasm32v1-none/release/price_oracle.wasm \
+            --source canary --network testnet)
+          echo "green=$GREEN" >> "$GITHUB_OUTPUT"
+      - name: Compare per-asset output (rollback on divergence)
+        env:
+          CANARY_BPS: ${{ inputs.canary_bps }}
+        run: |
+          scripts/canary.sh testnet canary "${{ inputs.blue_contract }}" \
+            "${{ steps.deploy.outputs.green }}" config/canary-assets.txt canary-out
+      - name: Retain divergence evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-record-${{ github.run_id }}
+          path: canary-out/
+          retention-days: 400
+
+  promote:
+    # `production` must have required reviewers configured; GitHub records
+    # the approving reviewer on the run, and the job stamps it into the record.
+    needs: canary
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: canary-record-${{ github.run_id }}
+          path: canary-out
+      - name: Record approval
+        run: |
+          APPROVER=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
+            --jq '.[-1].user.login')
+          jq --arg who "$APPROVER" '.approved_by = $who | .decision = "promoted"' \
+            canary-out/deployment-record.json > canary-out/promotion-record.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: promotion-record-${{ github.run_id }}
+          path: canary-out/promotion-record.json
+          retention-days: 400

@@ -185,6 +185,10 @@ Deploys the contract to Stellar testnet and runs a full lifecycle test:
 
 See [docs/e2e-testnet.md](docs/e2e-testnet.md) for prerequisites, configuration, and expected output.
 
+Automated testnet lifecycle CI (with adversarial phases) runs via `scripts/testnet-lifecycle.sh`; see `.github/workflows/testnet-lifecycle.yml`.
+
+Related reports: [gas cost dashboard](docs/gas-dashboard.md), [chaos invariants](docs/chaos-invariants.md), and mutation testing (`scripts/mutation-gate.sh`, config in `.cargo/mutants.toml`).
+
 ### Deploy
 
 ```bash
@@ -249,6 +253,9 @@ See [`docs/error-codes.md`](docs/error-codes.md) for the full registry with caus
 | [Deployment Record](docs/deployment.md) | Contract addresses, initialization parameters, admin addresses, deployment checklist |
 | [Security Audit Checklist](docs/security-audit-checklist.md) | Pre-audit review items: access control, input validation, arithmetic safety, storage safety, upgrade mechanism, event integrity, known patterns |
 | [Monitoring Dashboard](docs/monitoring/README.md) | Grafana dashboard setup and metrics reference |
+| [Integration Case Studies](docs/case-studies.md) | Lending, DEX and payments integrations with threat models, worked exploits and countermeasures |
+| [Seam Invariant Catalogue](docs/seam-invariants.md) | Cross-module invariants and the regression tests that enforce them |
+| [SLA](docs/SLA.md) | Service levels and the machine-enforceable clause map checked by `services/sla_monitor` |
 
 ## Documentation
 

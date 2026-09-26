@@ -779,6 +779,14 @@ pub enum DataKey {
     ExternalGovernor,
     /// Allow-list flag for a governance operation name (bool).
     GovernorAllowedOp(String),
+
+    // -------------------------------------------------------------------------
+    // #399: Source diversity — effective independence thresholds
+    // -------------------------------------------------------------------------
+    /// Alert thresholds for source-diversity monitoring (DiversityThresholds).
+    DiversityThresholds,
+    /// Ledger of the last diversity-threshold breach (u32, for alert damping).
+    DiversityLastBreachLedger,
 }
 
 /// A price submission from a single oracle source for a specific asset.
@@ -1700,15 +1708,29 @@ pub struct SourceProposal {
 // =============================================================================
 
 /// Geolocation and provider tags for an oracle source.
+///
+/// #399 extends the original #208 triple (`region`, `provider`, `jurisdiction`)
+/// with three independence axes: `infra` (hosting/infrastructure failure domain,
+/// e.g. cloud + region + ASN), `upstream` (upstream data origin/feed the source
+/// mirrors), and `owner` (operating entity / funding owner for Sybil detection).
+/// Older stored entries pre-#399 only carry the first three fields; readers
+/// must treat missing new fields as `"unknown"` (see `source_diversity`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct SourceGeoMetadata {
     pub region: String,
     pub provider: String,
     pub jurisdiction: String,
+    pub infra: String,
+    pub upstream: String,
+    pub owner: String,
 }
 
 /// Decentralization and concentration report for registered sources.
+///
+/// Legacy #208 report — preserved unchanged for backward compatibility.
+/// New code should prefer [`SourceDiversityReport`] (`get_source_diversity`),
+/// which measures effective independence instead of raw label counts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct DecentralizationReport {
@@ -1716,6 +1738,56 @@ pub struct DecentralizationReport {
     pub provider_hhi: u32,
     pub jurisdiction_hhi: u32,
     pub overall_score: u32,
+}
+
+// =============================================================================
+// #399 — Source diversity: effective independence (hardened revision)
+// =============================================================================
+
+/// Effective-independence diversity report for the active source set.
+///
+/// Measures failure-domain concentration, NOT jurisdiction labels. Two sources
+/// are independent only if they differ on ALL of (`infra`, `upstream`, `owner`).
+/// Sharing any one of those axes means a single cloud outage, upstream feed
+/// compromise, or operator key/funding failure can take both down at once.
+///
+/// See `docs/source-diversity.md` for the formal definition, assumptions, and
+/// the explicit list of outcomes this metric CANNOT detect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SourceDiversityReport {
+    /// Raw registered (active) source count — nominal diversity.
+    pub raw_count: u32,
+    /// Number of distinct (`infra`, `upstream`, `owner`) failure domains.
+    /// This is the effective independent source count. Always `<= raw_count`.
+    pub effective_independent_count: u32,
+    /// HHI (0–10000) per axis over the active set. 10000 = full concentration.
+    pub region_hhi: u32,
+    pub provider_hhi: u32,
+    pub jurisdiction_hhi: u32,
+    pub infra_hhi: u32,
+    pub upstream_hhi: u32,
+    pub owner_hhi: u32,
+    /// `10000 - avg(hhi over 6 axes)`. Higher = more diverse.
+    pub overall_score: u32,
+    /// Size of the single largest failure-domain group.
+    pub largest_domain_size: u32,
+    /// True when `effective_independent_count < min_effective` OR any axis
+    /// HHI exceeds `max_hhi_per_axis` (see [`DiversityThresholds`]).
+    pub is_low_diversity: bool,
+}
+
+/// Alert thresholds for source-diversity monitoring.
+///
+/// Stored under [`DataKey::DiversityThresholds`]. Defaults are conservative:
+/// at least 3 effective domains and no axis more concentrated than HHI 5000.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct DiversityThresholds {
+    /// Minimum acceptable `effective_independent_count`.
+    pub min_effective_sources: u32,
+    /// Maximum acceptable HHI on ANY single axis (0–10000).
+    pub max_hhi_per_axis: u32,
 }
 
 // =============================================================================
@@ -2762,4 +2834,68 @@ pub struct TokenSubscriptionRecord {
     pub start_timestamp: u64,
     pub expiry_timestamp: u64,
     pub deposited_amount: i128,
+}
+
+/// Partial aggregation policy; `None` fields inherit from the next layer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PolicyOverride {
+    /// Aggregation method (0..=4, see `AggregationMethod`).
+    pub method: Option<u32>,
+    /// Minimum contributing sources (quorum).
+    pub min_sources: Option<u32>,
+    /// Maximum submission age in seconds.
+    pub freshness_secs: Option<u64>,
+    /// Maximum deviation from the median in basis points.
+    pub max_deviation_bps: Option<u32>,
+}
+
+/// Fully resolved aggregation policy with the layer that supplied each field
+/// (0 = global default, 1 = asset class, 2 = asset override).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct EffectivePolicy {
+    pub method: u32,
+    pub min_sources: u32,
+    /// 0 = no freshness limit.
+    pub freshness_secs: u64,
+    /// 0 = deviation filter disabled.
+    pub max_deviation_bps: u32,
+    pub method_layer: u32,
+    pub min_sources_layer: u32,
+    pub freshness_layer: u32,
+    pub max_deviation_layer: u32,
+}
+
+/// Linear freshness decay: full weight at age 0, `min_weight` at `window_secs`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct FreshnessCurve {
+    pub window_secs: u64,
+    pub min_weight: u32,
+}
+
+/// Raw and freshness-weighted medians plus the weight applied to each source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct WeightedAggregate {
+    pub raw_median: i128,
+    pub weighted_median: i128,
+    pub sources: soroban_sdk::Vec<Address>,
+    pub weights: soroban_sdk::Vec<u32>,
+}
+
+/// TWAP value together with the observation statistics backing it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct TwapResult {
+    pub price: i128,
+    pub timestamp: u64,
+    pub last_updated: u32,
+    /// Distinct observations (ledger segments) inside the window.
+    pub cardinality: u32,
+    /// Largest single-observation share of the window, in basis points.
+    pub max_weight_bps: u32,
+    /// True when the whole window rests on a single observation.
+    pub concentrated: bool,
 }
