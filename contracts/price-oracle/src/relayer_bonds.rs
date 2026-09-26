@@ -135,6 +135,12 @@ pub fn withdraw_relayer_bond(env: &Env, relayer: Address) {
         return;
     }
 
+    // Bond stays locked while any failure report is outstanding, so a relayer cannot
+    // escape a pending or executable slash by withdrawing first.
+    if get_relayer_failure_count(env, relayer.clone()) > 0 {
+        panic_with_error!(env, ErrorCode::RelayerBondLocked);
+    }
+
     let token_contract = crate::reputation::get_stake_token_contract(env)
         .unwrap_or_else(|| panic_with_error!(env, ErrorCode::StakeTokenNotConfigured));
     let client = soroban_sdk::token::Client::new(env, &token_contract);
