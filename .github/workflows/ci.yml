@@ -72,6 +72,20 @@ jobs:
           command: check
           arguments: --config deny.toml
 
+  sla-monitor:
+    name: SLA monitor (docs/SLA.md consistency + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - name: Check docs/SLA.md matches the monitor clause map
+        run: python -m services.sla_monitor.monitor --check-sla
+      - name: Run SLA monitor tests
+        run: python -m pytest services/sla_monitor -q
+
   fuzz:
     name: Coverage-guided fuzzing (1M iterations)
     runs-on: ubuntu-latest
@@ -122,6 +136,18 @@ jobs:
             -timeout=30 \
             -error_exitcode=1
         # 809 bytes = 100 i64 words (800) + 1 byte for k + extra room
+
+      # ── Fuzz target 3: security invariants for trimmed mean / VWAP / weighted median (#409)
+      - name: Fuzz fuzz_aggregation_invariants (1 000 000 iterations)
+        run: |
+          cargo fuzz run fuzz_aggregation_invariants \
+            fuzz/corpus/fuzz_aggregation_invariants \
+            -- \
+            -runs=1000000 \
+            -max_len=401 \
+            -timeout=30 \
+            -error_exitcode=1
+        # 401 bytes = 1 trim byte + 100 i32 words (50 prices + 50 volumes)
 
       # ── Upload any crash artifacts ───────────────────────────────────────────
       - name: Upload fuzz artifacts on failure

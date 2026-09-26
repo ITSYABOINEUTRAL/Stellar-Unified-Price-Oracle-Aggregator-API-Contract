@@ -166,6 +166,12 @@ mod external_governance;
 mod circuit_breaker_tests;
 
 #[cfg(test)]
+mod cross_module_seam_tests;
+
+#[cfg(test)]
+mod case_study_tests;
+
+#[cfg(test)]
 mod timelock_tests;
 
 #[cfg(test)]
