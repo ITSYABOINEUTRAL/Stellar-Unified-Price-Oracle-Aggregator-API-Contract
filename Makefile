@@ -8,8 +8,10 @@
 #   fmt     - format code
 #   check   - check formatting without modifying files
 #   clean   - remove build artifacts
+#   gas-gate  - adversarial gas-budget regression gates (#419)
+#   load-test - adversarial load test v2 (#413)
 
-.PHONY: all build test lint fmt check clean watch
+.PHONY: all build test lint fmt check clean watch gas-gate load-test
 
 all: build test
 
@@ -20,6 +22,14 @@ build:
 # Run all unit tests
 test:
 	cargo test -p price-oracle --lib
+
+# Adversarial gas-budget regression gates (docs/gas-budget.md)
+gas-gate:
+	cargo test -p price-oracle --lib gas_budget_tests -- --nocapture
+
+# Adversarial load test v2 (docs/gas-usage.md)
+load-test:
+	cargo test -p price-oracle --lib load_v2 -- --nocapture --test-threads=1
 
 # Run clippy linter
 lint:

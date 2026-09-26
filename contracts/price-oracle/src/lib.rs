@@ -43,6 +43,8 @@ pub(crate) mod core_pricing;
 // against the pure core, so expose storage under the same feature.
 mod audit_log;
 mod batch_storage;
+#[allow(dead_code)]
+mod blue_green;
 mod config_history;
 mod contribution_quality;
 mod correlation;
@@ -62,6 +64,8 @@ mod exotic_pricing;
 mod export_history;
 mod fee_market;
 mod finality;
+#[allow(dead_code)]
+mod flash_swing;
 mod freeze;
 mod gas_metering;
 mod health;
@@ -93,6 +97,7 @@ mod scheduling;
 mod signed_submission;
 mod simulate_batch;
 mod source_deviation;
+mod source_diversity;
 mod sources;
 mod state_channel;
 mod state_introspection;
@@ -168,6 +173,12 @@ mod policy;
 
 #[cfg(test)]
 mod circuit_breaker_tests;
+
+#[cfg(test)]
+mod cross_module_seam_tests;
+
+#[cfg(test)]
+mod case_study_tests;
 
 #[cfg(test)]
 mod timelock_tests;
@@ -274,24 +285,26 @@ pub use types::{
     ConsumerAccessMode, ConsumerInfo, ConsumerTier, ContractMetadata, ContribQualityRecord,
     CorrelationBand, CorrelationPair, CrossChainPriceEntry, CrossChainPricePayload,
     CrossChainRelayConfig, CrossReferenceResult, DataKey, DecentralizationReport, DemeritConfig,
-    DeviationReport, DexPrice, DisqualificationStatus, EcosystemMetadata, EffectivePolicy,
-    EmergencyPause, ErrorCode, ExportedEntry, ExportedHistorySnapshot, ExternalDataProof,
-    FeeMarketSubmission, FeedMetadata, FinalityStatus, FinalizedPrice, ForeignAssetMapping,
-    FreshnessCurve, FrozenPrice, GasRecord, Groth16Proof, Groth16VerifyingKey, GuardianRecovery,
-    HealthReport, MigrationState, MigrationStatus, MultiSigOperation, NotificationPreference,
-    Operation, OperationKind, OperationPriority, OperationSimulationResult, OperationStatus,
-    OperationTemplate, OperationType, OptimisticProposal, OptimisticProposalStatus, OracleSources,
-    PendingBatch, PendingFeeSubmissions, PendingFinalityEntry, PendingOperation, PolicyOverride,
-    PriceBounds, PriceCommit, PriceData, PriceEntry, PriceEventPayload, PriceHistoryEntry,
-    PriceOverrideEntry, PriceProof, ReferenceOracleEntry, RelayedSubmission, RelayerAssetStat,
-    RelayerDashboard, RelayerFailureReason, RelayerInfo, Role, SimulationWarning, SoroswapPool,
-    SourceDemeritState, SourceDidLink, SourceGeoMetadata, SourceGovernance, SourceHealthStatus,
-    SourceProposal, SourceRelayerDelegation, SourceRotationSchedule, SourceStakeRecord,
-    SourceVerification, StateAnalysis, StateChannel, StateDiff, StateDiffEntry, StateDump,
-    StellarHeader, StorageBatchRequest, StorageBatchResult, StorageBudget, StorageTtlEntry,
-    SubscriptionExpiry, SubscriptionPayment, SubscriptionPlan, SubscriptionPlans, TemplateStep,
-    TotalStorageBudget, TwapMethod, TwapResult, VersionedAggregatePrice, WeightedAggregate,
-    WormholeGuardianSet, WormholePricePayload, WormholeVaa, ZkPriceAttestation,
+    DiversityThresholds,
+    DeviationReport, DexPrice, DisqualificationStatus, EcosystemMetadata, EmergencyPause,
+    ErrorCode, ExportedEntry, ExportedHistorySnapshot, ExternalDataProof, FeeMarketSubmission,
+    FeedMetadata, FinalityStatus, FinalizedPrice, ForeignAssetMapping, FrozenPrice, GasRecord,
+    Groth16Proof, Groth16VerifyingKey, GuardianRecovery, HealthReport, MigrationState,
+    MigrationStatus, MultiSigOperation, NotificationPreference, Operation, OperationKind,
+    OperationPriority, OperationSimulationResult, OperationStatus, OperationTemplate,
+    OperationType, OptimisticProposal, OptimisticProposalStatus, OracleSources, PendingBatch,
+    PendingFeeSubmissions, PendingFinalityEntry, PendingOperation, PriceBounds, PriceCommit,
+    PriceData, PriceEntry, PriceEventPayload, PriceHistoryEntry, PriceOverrideEntry, PriceProof,
+    ReferenceOracleEntry, RelayedSubmission, RelayerAssetStat, RelayerDashboard,
+    RelayerFailureReason, RelayerInfo, Role, SimulationWarning, SoroswapPool, SourceDemeritState,
+    SourceDidLink, SourceDiversityReport, SourceGeoMetadata, SourceGovernance, SourceHealthStatus,
+    SourceProposal,
+    SourceRelayerDelegation, SourceRotationSchedule, SourceStakeRecord, SourceVerification,
+    StateAnalysis, StateChannel, StateDiff, StateDiffEntry, StateDump, StellarHeader,
+    StorageBatchRequest, StorageBatchResult, StorageBudget, StorageTtlEntry, SubscriptionExpiry,
+    SubscriptionPayment, SubscriptionPlan, SubscriptionPlans, TemplateStep, TotalStorageBudget,
+    TwapMethod, VersionedAggregatePrice, WormholeGuardianSet, WormholePricePayload, WormholeVaa,
+    ZkPriceAttestation,
 };
 
 use soroban_sdk::{
@@ -1607,6 +1620,59 @@ impl PriceOracleContract {
 
     pub fn get_decentralization_report(env: Env) -> DecentralizationReport {
         sources::get_decentralization_report(&env)
+    }
+
+    // --- #399: Source diversity — effective independence ---
+    //
+    // `get_source_diversity` is the hardened successor to
+    // `get_decentralization_report`: it measures failure-domain independence
+    // (infra / upstream / owner) instead of counting jurisdiction labels, and
+    // reports `effective_independent_count` alongside the raw count so the
+    // Sybil / nominal-diversity trap is visible on dashboards and alerts.
+
+    pub fn get_source_diversity(env: Env) -> SourceDiversityReport {
+        source_diversity::get_source_diversity(&env)
+    }
+
+    pub fn set_source_diversity(
+        env: Env,
+        source: Address,
+        infra: String,
+        upstream: String,
+        owner: String,
+    ) {
+        reentrancy::enter(&env);
+        source_diversity::set_source_diversity(&env, source, infra, upstream, owner);
+        reentrancy::exit(&env);
+    }
+
+    pub fn set_diversity_thresholds(
+        env: Env,
+        min_effective_sources: u32,
+        max_hhi_per_axis: u32,
+    ) {
+        reentrancy::enter(&env);
+        source_diversity::set_diversity_thresholds(
+            &env,
+            min_effective_sources,
+            max_hhi_per_axis,
+        );
+        reentrancy::exit(&env);
+    }
+
+    pub fn get_diversity_thresholds(env: Env) -> DiversityThresholds {
+        source_diversity::get_diversity_thresholds(&env)
+    }
+
+    pub fn check_diversity_alert(env: Env) -> bool {
+        reentrancy::enter(&env);
+        let fired = source_diversity::check_diversity_alert(&env);
+        reentrancy::exit(&env);
+        fired
+    }
+
+    pub fn get_last_diversity_breach_ledger(env: Env) -> Option<u32> {
+        source_diversity::get_last_diversity_breach_ledger(&env)
     }
 
     // --- #209: Source Heartbeat Liveness Bond ---
@@ -3488,6 +3554,10 @@ impl PriceOracleContract {
     /// Withdraws the entire deposited performance bond back to `relayer`.
     ///
     /// The relayer must authorize this call. A no-op if nothing is deposited.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::RelayerBondLocked`] — failure reports are outstanding.
     pub fn withdraw_relayer_bond(env: Env, relayer: Address) {
         relayer_bonds::withdraw_relayer_bond(&env, relayer);
     }
@@ -5728,9 +5798,19 @@ mod commit_reveal_tests;
 
 #[cfg(test)]
 mod bft_tests;
+#[cfg(test)]
+mod gas_budget_tests;
+#[cfg(test)]
+mod load_v2_tests;
 
 #[cfg(test)]
 mod finality_tests;
+
+#[cfg(test)]
+mod chaos_tests;
+
+#[cfg(test)]
+mod gas_amplification_tests;
 
 #[cfg(test)]
 mod correlation_feature_tests;
@@ -5763,4 +5843,4 @@ mod issue_380_memory_allocation_tests;
 mod issue_381_adaptive_ttl_tests;
 
 #[cfg(test)]
-mod issues_470_477_tests;
+mod source_diversity_tests;

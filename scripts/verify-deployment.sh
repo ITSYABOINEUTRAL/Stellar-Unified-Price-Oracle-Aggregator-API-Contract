@@ -182,6 +182,21 @@ check "test asset unregistered"   "false" "$ASSET_AFTER"
 stellar keys rm _verify_source 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# 8. Post-upgrade invariant sweep (#415)
+# ---------------------------------------------------------------------------
+info "=== 8. Post-upgrade invariants ==="
+MIG_STATE=$(invoke get_migration_state 2>&1 || echo "error")
+check "no migration in progress" "null" "${MIG_STATE:-null}"
+SCHEMA=$(invoke get_storage_version 2>&1 || echo "error")
+if [[ -n "${EXPECTED_SCHEMA:-}" ]]; then
+    check "storage schema version" "$EXPECTED_SCHEMA" "$SCHEMA"
+else
+    [[ "$SCHEMA" =~ ^[0-9]+$ ]] && pass "schema version is a number ($SCHEMA)" || fail "schema version not numeric: $SCHEMA"
+fi
+ADMIN_AFTER=$(invoke get_admin_address)
+check "admin unchanged across upgrade" "$ADMIN_ADDRESS" "$ADMIN_AFTER"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

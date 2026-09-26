@@ -238,6 +238,52 @@ paths:
         '404':
           description: Consumer not found or not subscribed
 
+  /contracts/{contractId}/get_source_diversity:
+    get:
+      summary: Effective source independence report
+      description: >-
+        Returns the #399 SourceDiversityReport over the active source set:
+        raw_count vs effective_independent_count (distinct infra/upstream/owner
+        failure domains), per-axis HHI concentration, and is_low_diversity.
+        Fires alerts even when the raw count looks healthy (Sybil trap).
+      operationId: getSourceDiversity
+      parameters:
+        - name: contractId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Diversity report retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  raw_count:
+                    type: integer
+                  effective_independent_count:
+                    type: integer
+                  region_hhi:
+                    type: integer
+                  provider_hhi:
+                    type: integer
+                  jurisdiction_hhi:
+                    type: integer
+                  infra_hhi:
+                    type: integer
+                  upstream_hhi:
+                    type: integer
+                  owner_hhi:
+                    type: integer
+                  overall_score:
+                    type: integer
+                  largest_domain_size:
+                    type: integer
+                  is_low_diversity:
+                    type: boolean
+
   /contracts/{contractId}/is_source:
     get:
       summary: Check if an address is a registered source

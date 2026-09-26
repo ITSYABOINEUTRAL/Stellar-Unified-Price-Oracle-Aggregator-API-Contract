@@ -210,7 +210,9 @@ pub fn get_min_sources_required(env: &Env) -> u32 {
     env.storage()
         .persistent()
         .get(&key)
-        .unwrap_or(DEFAULT_MIN_SOURCES)
+        // Fail closed: `initialize` always writes this key, so a missing entry means it was
+        // evicted. Falling back to a permissive default would let a single source set prices.
+        .unwrap_or_else(|| panic_with_error!(env, ErrorCode::ConfigMissing))
 }
 
 pub fn set_max_history_length(env: &Env, new_max: u32) {

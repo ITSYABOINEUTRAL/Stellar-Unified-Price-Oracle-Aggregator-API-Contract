@@ -1005,6 +1005,18 @@ pub fn submit_price(
         panic_with_error!(env, ErrorCode::InvalidTimestamp);
     }
 
+    // A delayed (out-of-order) submission must never silently replace a newer
+    // price from the same source: reject it loudly instead.
+    if let Some(prev) = env
+        .storage()
+        .persistent()
+        .get::<_, PriceEntry>(&DataKey::Submission(asset.clone(), source.clone()))
+    {
+        if timestamp < prev.timestamp {
+            panic_with_error!(env, ErrorCode::InvalidTimestamp);
+        }
+    }
+
     if check_deviation_circuit_breaker(env, &source, &asset, price) {
         return;
     }
@@ -1999,7 +2011,7 @@ pub fn current_round_ledger(env: &Env) -> u32 {
 ///
 /// The source must call this during the commit window for the round.
 /// A commit is a 32-byte hash computed as:
-///   `sha256(price_le_bytes || salt_bytes || round_ledger_le_bytes)`
+///   `sha256(price_le_bytes || salt_bytes || round_ledger_le_bytes || source_xdr)`
 /// where `price` is i128 (16 bytes LE), `salt` is arbitrary caller-chosen bytes,
 /// and `round_ledger` is u32 (4 bytes LE).
 ///
@@ -2036,7 +2048,7 @@ pub fn commit_price(env: &Env, source: Address, asset: Address, hash: soroban_sd
     }
 
     let commit = crate::types::PriceCommit {
-        hash,
+        hash: hash.clone(),
         committed_ledger: round_ledger,
         source: source.clone(),
         asset: asset.clone(),
@@ -2058,6 +2070,7 @@ pub fn commit_price(env: &Env, source: Address, asset: Address, hash: soroban_sd
         source,
         round_ledger,
         committed_at_ledger: current_ledger,
+        hash,
     }
     .publish(env);
 }
@@ -2067,7 +2080,7 @@ pub fn commit_price(env: &Env, source: Address, asset: Address, hash: soroban_sd
 /// Reveals a committed price for a specific round.
 ///
 /// The source provides `(asset, price, salt, round_ledger)`. The contract recomputes
-/// `sha256(price_le_bytes || salt_bytes || round_ledger_le_bytes)` and verifies it
+/// `sha256(price_le_bytes || salt_bytes || round_ledger_le_bytes || source_xdr)` and verifies it
 /// matches the stored commit hash. If it matches, the price is stored as a normal
 /// `PriceEntry` and aggregation is triggered.
 ///
@@ -2159,8 +2172,8 @@ fn _do_reveal(
         panic_with_error!(env, ErrorCode::AlreadyCommitted);
     }
 
-    // Recompute the expected hash: sha256(price_le || salt || round_ledger_le)
-    let expected_hash = _compute_commit_hash(env, price, &salt, round_ledger);
+    // Recompute the expected hash: sha256(price_le || salt || round_ledger_le || source_xdr)
+    let expected_hash = _compute_commit_hash(env, source, price, &salt, round_ledger);
 
     if expected_hash != commit.hash {
         panic_with_error!(env, ErrorCode::CommitHashMismatch);
@@ -2240,13 +2253,17 @@ fn _do_reveal(
     aggregate_asset(env, asset, current_ledger, decimals);
 }
 
-/// Computes `sha256(price_le_bytes || salt_bytes || round_le_bytes)`.
+/// Computes `sha256(price_le_bytes || salt_bytes || round_le_bytes || source_xdr)`.
 ///
 /// - `price` is encoded as 16 bytes little-endian (i128).
 /// - `salt` is arbitrary bytes provided by the caller.
 /// - `round_ledger` is encoded as 4 bytes little-endian (u32).
+/// - `source` is the committer's address in XDR form. Binding the committer
+///   into the preimage means a copied commitment can never be revealed by the
+///   copier, even after the victim's reveal discloses price and salt (#447).
 fn _compute_commit_hash(
     env: &Env,
+    source: &Address,
     price: i128,
     salt: &soroban_sdk::Bytes,
     round_ledger: u32,
@@ -2265,6 +2282,8 @@ fn _compute_commit_hash(
     for b in round_bytes.iter() {
         preimage.push_back(*b);
     }
+    // Append the committer's address (XDR).
+    preimage.append(&soroban_sdk::xdr::ToXdr::to_xdr(source.clone(), env));
 
     env.crypto().sha256(&preimage).into()
 }
@@ -2637,6 +2656,14 @@ pub fn slash_expired_commits(env: &Env, asset: Address, source: Address, round_l
         slash_amount: actual_slash,
         remaining_stake: remaining,
         slash_percent: 0,
+    }
+    .publish(env);
+
+    crate::events::CommitWithheldEvent {
+        asset,
+        source,
+        round_ledger,
+        slashed_amount: actual_slash,
     }
     .publish(env);
 }
