@@ -185,6 +185,10 @@ Deploys the contract to Stellar testnet and runs a full lifecycle test:
 
 See [docs/e2e-testnet.md](docs/e2e-testnet.md) for prerequisites, configuration, and expected output.
 
+Automated testnet lifecycle CI (with adversarial phases) runs via `scripts/testnet-lifecycle.sh`; see `.github/workflows/testnet-lifecycle.yml`.
+
+Related reports: [gas cost dashboard](docs/gas-dashboard.md), [chaos invariants](docs/chaos-invariants.md), and mutation testing (`scripts/mutation-gate.sh`, config in `.cargo/mutants.toml`).
+
 ### Deploy
 
 ```bash

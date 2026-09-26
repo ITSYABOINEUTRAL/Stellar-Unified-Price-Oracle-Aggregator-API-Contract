@@ -1,0 +1,62 @@
+name: Mutation Testing
+
+# #412: security gate. Any surviving security-critical mutant fails CI.
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+jobs:
+  critical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Security-critical mutants (100% kill required)
+        run: ./scripts/mutation-gate.sh critical
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-critical
+          path: mutants-critical/mutants.out
+
+  general:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # PRs only mutate changed code to keep duration bounded; the weekly
+      # schedule covers the whole tree.
+      - name: Limit to PR diff
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+          echo "DIFF_ARGS=--in-diff pr.diff" >> "$GITHUB_ENV"
+      - name: General mutants
+        env:
+          GENERAL_THRESHOLD: "80"
+          MUTANTS_ARGS: --shard ${{ matrix.shard }}/4 ${{ env.DIFF_ARGS }}
+        run: ./scripts/mutation-gate.sh general
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-general-${{ matrix.shard }}
+          path: mutants-general/mutants.out
